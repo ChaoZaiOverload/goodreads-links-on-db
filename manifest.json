@@ -1,0 +1,26 @@
+{
+  "manifest_version": 3,
+  "name": "Goodreads Link on Douban",
+  "version": "1.0.0",
+  "description": "Shows a Goodreads link next to the book title on Douban book pages",
+  "permissions": [],
+  "host_permissions": [
+    "https://book.douban.com/subject/*",
+    "https://www.goodreads.com/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://book.douban.com/subject/*/"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}
