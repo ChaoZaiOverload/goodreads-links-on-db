@@ -73,9 +73,16 @@ async function findGoodreadsData(isbn, title, author) {
   });
   if (!res.ok) throw new Error(`Goodreads search failed: ${res.status}`);
 
+  // ISBN searches redirect straight to the book page — the redirect URL
+  // is the answer; no need to parse links from the HTML.
+  if (res.url.includes("/book/show/")) {
+    const url = res.url.split("?")[0];
+    const { rating, ratingCount } = parseRatingInfo(await res.text());
+    return { url, rating, ratingCount };
+  }
+
+  // Title/author search — find the first result via its class="bookTitle" link.
   const html = await res.text();
-  // Match class="bookTitle" links — the actual search result titles — not
-  // sidebar/nav /book/show/ links that appear earlier in the page HTML.
   const match =
     html.match(/class="bookTitle"[^>]*href="(\/book\/show\/[^"?]*)/) ||
     html.match(/href="(\/book\/show\/[^"?]*)"[^>]*class="bookTitle"/);
