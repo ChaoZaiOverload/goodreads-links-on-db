@@ -66,28 +66,40 @@ async function lookupEnglishEdition(mainGoodreadsUrl, titleEl) {
 }
 
 function findEnglishEditionUrl() {
-  const section = findOtherEditionsSection();
-  if (!section) return null;
+  // Try precise class selectors first.
+  const section =
+    document.querySelector(".subject_others_interest") ||
+    document.querySelector(".subject-others-interests") ||
+    document.querySelector("[class*='others-interest']");
 
-  for (const a of section.querySelectorAll('a[href*="book.douban.com/subject/"]')) {
-    const editionTitle = getEditionTitle(a);
-    if (editionTitle && isLikelyEnglish(editionTitle)) {
-      return a.href.split("?")[0];
+  if (section) {
+    return searchSectionForEnglish(section);
+  }
+
+  // Fall back to locating the "其他版本" h2 and walking only its
+  // sibling elements (stopping at the next heading). Using closest("div")
+  // would return a container that also holds recommendation sections whose
+  // absolute book.douban.com links would be mistaken for English editions.
+  for (const h of document.querySelectorAll("h2")) {
+    if (!h.textContent.includes("其他版本")) continue;
+    let el = h.nextElementSibling;
+    while (el && !el.matches("h2, h3")) {
+      const url = searchSectionForEnglish(el);
+      if (url) return url;
+      el = el.nextElementSibling;
     }
   }
   return null;
 }
 
-function findOtherEditionsSection() {
-  const byClass =
-    document.querySelector(".subject_others_interest") ||
-    document.querySelector(".subject-others-interests") ||
-    document.querySelector("[class*='others-interest']");
-  if (byClass) return byClass;
-
-  for (const h of document.querySelectorAll("h2")) {
-    if (h.textContent.includes("其他版本")) {
-      return h.closest("div") || h.parentElement;
+function searchSectionForEnglish(container) {
+  // Match both relative (/subject/…) and absolute (https://book.douban.com/subject/…) hrefs.
+  const selector = 'a[href^="/subject/"], a[href*="book.douban.com/subject/"]';
+  for (const a of container.querySelectorAll(selector)) {
+    if (!a.href.includes("book.douban.com/subject/")) continue;
+    const editionTitle = getEditionTitle(a);
+    if (editionTitle && isLikelyEnglish(editionTitle)) {
+      return a.href.split("?")[0];
     }
   }
   return null;
