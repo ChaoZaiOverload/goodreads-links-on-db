@@ -3,7 +3,7 @@
   "name": "Goodreads Link on Douban",
   "version": "1.0.0",
   "description": "Shows a Goodreads link next to the book title on Douban book pages",
-  "permissions": [],
+  "permissions": ["webNavigation"],
   "host_permissions": [
     "https://book.douban.com/subject/*",
     "https://www.goodreads.com/*"
@@ -15,7 +15,7 @@
     {
       "matches": ["https://book.douban.com/subject/*"],
       "js": ["content.js"],
-      "run_at": "document_idle"
+      "run_at": "document_end"
     }
   ],
   "icons": {

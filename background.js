@@ -1,12 +1,61 @@
-chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+// tabId -> Promise<{url, rating, ratingCount} | null>
+const preloadCache = new Map();
+
+// Start fetching the moment Chrome commits navigation to a Douban book page,
+// well before the content script runs at document_end.
+chrome.webNavigation.onCommitted.addListener(
+  (details) => {
+    if (details.frameId !== 0) return; // main frame only
+    preloadCache.set(details.tabId, preloadForDoubanUrl(details.url));
+  },
+  { url: [{ hostEquals: "book.douban.com", pathContains: "/subject/" }] }
+);
+
+chrome.tabs.onRemoved.addListener((tabId) => preloadCache.delete(tabId));
+
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.type !== "FIND_GOODREADS") return false;
 
-  findGoodreadsData(msg.isbn, msg.title, msg.author)
+  const tabId = sender.tab?.id;
+  // Use in-flight or completed preload if available, otherwise start fresh.
+  const work =
+    (tabId != null && preloadCache.get(tabId)) ??
+    findGoodreadsData(msg.isbn, msg.title, msg.author);
+
+  work
     .then((data) => sendResponse(data ?? { url: null }))
     .catch(() => sendResponse({ url: null }));
 
-  return true; // keep message channel open for async response
+  return true;
 });
+
+// Fetch the Douban page from the background to extract book info, then
+// immediately kick off the Goodreads search without waiting for the content
+// script to parse the DOM.
+async function preloadForDoubanUrl(doubanUrl) {
+  try {
+    const res = await fetch(doubanUrl, {
+      headers: { "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8" },
+    });
+    if (!res.ok) return null;
+    const html = await res.text();
+
+    const isbn13 = html.match(/ISBN[:：]\s*(\d{13})/);
+    const isbn10 = html.match(/ISBN[:：]\s*(\d{10})/);
+    const isbn = isbn13?.[1] ?? isbn10?.[1] ?? null;
+
+    const titleMatch = html.match(/property="v:itemreviewed">([^<]+)</);
+    const title = titleMatch?.[1]?.trim() ?? null;
+
+    const authorMatch = html.match(/rel="v:author"[^>]*>([^<]+)</);
+    const author = authorMatch?.[1]?.trim() ?? null;
+
+    if (!isbn && !title) return null;
+    return findGoodreadsData(isbn, title, author);
+  } catch {
+    return null;
+  }
+}
 
 async function findGoodreadsData(isbn, title, author) {
   const query = isbn || buildTitleQuery(title, author);
@@ -21,7 +70,6 @@ async function findGoodreadsData(isbn, title, author) {
   const url = parseFirstBookUrl(html);
   if (!url) return null;
 
-  // Fetch the actual book page to get rating data
   try {
     const bookRes = await fetch(url, {
       headers: { "Accept-Language": "en-US,en;q=0.9" },
@@ -37,8 +85,7 @@ async function findGoodreadsData(isbn, title, author) {
 }
 
 function buildTitleQuery(title, author) {
-  if (author) return `${title} ${author}`;
-  return title;
+  return author ? `${title} ${author}` : title;
 }
 
 function parseFirstBookUrl(html) {
@@ -49,7 +96,6 @@ function parseFirstBookUrl(html) {
 }
 
 function parseRatingInfo(html) {
-  // JSON-LD schema is the most reliable source
   const ldMatch = html.match(/<script type="application\/ld\+json">([\s\S]*?)<\/script>/);
   if (ldMatch) {
     try {
@@ -63,7 +109,6 @@ function parseRatingInfo(html) {
     } catch {}
   }
 
-  // Fallback: scrape visible HTML
   const ratingMatch = html.match(/class="RatingStatistics__rating[^"]*"[^>]*>\s*([0-9.]+)/);
   const countMatch = html.match(/([\d,]+)\s+ratings/);
   return {
