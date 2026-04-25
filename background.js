@@ -47,8 +47,8 @@ async function fetchDataForDoubanUrl(doubanUrl) {
     if (!res.ok) return null;
     const html = await res.text();
 
-    const isbn13 = html.match(/ISBN[:：]\s*(\d{13})/);
-    const isbn10 = html.match(/ISBN[:：]\s*(\d{10})/);
+    const isbn13 = html.match(/ISBN[:：][^0-9]*(\d{13})/);
+    const isbn10 = html.match(/ISBN[:：][^0-9]*(\d{10})/);
     const isbn = isbn13?.[1] ?? isbn10?.[1] ?? null;
 
     const titleMatch = html.match(/property="v:itemreviewed">([^<]+)</);
