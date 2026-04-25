@@ -10,19 +10,26 @@
   titleEl.parentElement.appendChild(wrapper);
 
   try {
-    const response = await chrome.runtime.sendMessage({
-      type: "FIND_GOODREADS",
+    // Phase 1: get the URL → make the button clickable immediately.
+    const urlResp = await chrome.runtime.sendMessage({
+      type: "FIND_GOODREADS_URL",
       isbn,
       title,
       author,
     });
 
-    if (response?.url) {
-      btn.href = response.url;
+    if (urlResp?.url) {
+      btn.href = urlResp.url;
       setButtonState(btn, "found");
-      if (response.rating != null || response.ratingCount != null) {
-        enableTooltip(btn, tooltip, response.rating, response.ratingCount);
-      }
+
+      // Phase 2: get ratings in the background → enable tooltip when ready.
+      chrome.runtime.sendMessage({ type: "FIND_GOODREADS_RATINGS" })
+        .then((r) => {
+          if (r?.rating != null || r?.ratingCount != null) {
+            enableTooltip(btn, tooltip, r.rating, r.ratingCount);
+          }
+        })
+        .catch(() => {});
     } else {
       const query = isbn || `${title} ${author}`.trim();
       btn.href = `https://www.goodreads.com/search?q=${encodeURIComponent(query)}&search_type=books`;

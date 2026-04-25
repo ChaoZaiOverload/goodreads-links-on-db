@@ -1,12 +1,10 @@
-// tabId -> Promise<{url, rating, ratingCount} | null>
+// tabId -> { urlP: Promise<string|null>, ratingsP: Promise<{rating,ratingCount}|null> }
 const preloadCache = new Map();
 
-// Start fetching the moment Chrome commits navigation to a Douban book page,
-// well before the content script runs at document_end.
 chrome.webNavigation.onCommitted.addListener(
   (details) => {
-    if (details.frameId !== 0) return; // main frame only
-    preloadCache.set(details.tabId, preloadForDoubanUrl(details.url));
+    if (details.frameId !== 0) return;
+    preloadCache.set(details.tabId, buildLookupFromDouban(details.url));
   },
   { url: [{ hostEquals: "book.douban.com", pathContains: "/subject/" }] }
 );
@@ -14,85 +12,95 @@ chrome.webNavigation.onCommitted.addListener(
 chrome.tabs.onRemoved.addListener((tabId) => preloadCache.delete(tabId));
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
-  if (msg.type !== "FIND_GOODREADS") return false;
-
   const tabId = sender.tab?.id;
-  // Use in-flight or completed preload if available, otherwise start fresh.
-  const work =
-    (tabId != null && preloadCache.get(tabId)) ??
-    findGoodreadsData(msg.isbn, msg.title, msg.author);
 
-  work
-    .then((data) => sendResponse(data ?? { url: null }))
-    .catch(() => sendResponse({ url: null }));
+  if (msg.type === "FIND_GOODREADS_URL") {
+    let lookup = tabId != null ? preloadCache.get(tabId) : null;
+    if (!lookup) {
+      lookup = buildLookupFromInfo(msg.isbn, msg.title, msg.author);
+      if (tabId != null) preloadCache.set(tabId, lookup);
+    }
+    lookup.urlP
+      .then((url) => sendResponse({ url }))
+      .catch(() => sendResponse({ url: null }));
+    return true;
+  }
 
-  return true;
+  if (msg.type === "FIND_GOODREADS_RATINGS") {
+    const lookup = tabId != null ? preloadCache.get(tabId) : null;
+    if (!lookup?.ratingsP) {
+      sendResponse({ rating: null, ratingCount: null });
+      return false;
+    }
+    lookup.ratingsP
+      .then((data) => sendResponse(data ?? { rating: null, ratingCount: null }))
+      .catch(() => sendResponse({ rating: null, ratingCount: null }));
+    return true;
+  }
+
+  return false;
 });
 
-// Fetch the Douban page from the background to extract book info, then
-// immediately kick off the Goodreads search without waiting for the content
-// script to parse the DOM.
-async function preloadForDoubanUrl(doubanUrl) {
+// Preload path: fetch the Douban page to extract book info before the content
+// script runs, then immediately start both Goodreads fetches as chained promises.
+function buildLookupFromDouban(doubanUrl) {
+  const infoP = fetch(doubanUrl, {
+    headers: { "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8" },
+  })
+    .then((r) => (r.ok ? r.text() : Promise.reject()))
+    .then(extractBookInfoFromHtml)
+    .catch(() => null);
+
+  const urlP = infoP.then((info) =>
+    info ? fetchGoodreadsUrl(info.isbn, info.title, info.author) : null
+  );
+  const ratingsP = urlP.then((url) => (url ? fetchRatings(url) : null));
+
+  return { urlP, ratingsP };
+}
+
+// Fresh-fetch path (no preload cache hit).
+function buildLookupFromInfo(isbn, title, author) {
+  const urlP = fetchGoodreadsUrl(isbn, title, author);
+  const ratingsP = urlP.then((url) => (url ? fetchRatings(url) : null));
+  return { urlP, ratingsP };
+}
+
+function extractBookInfoFromHtml(html) {
+  const isbn13 = html.match(/ISBN[:：]\s*(\d{13})/);
+  const isbn10 = html.match(/ISBN[:：]\s*(\d{10})/);
+  const isbn = isbn13?.[1] ?? isbn10?.[1] ?? null;
+
+  const titleMatch = html.match(/property="v:itemreviewed">([^<]+)</);
+  const title = titleMatch?.[1]?.trim() ?? null;
+
+  const authorMatch = html.match(/rel="v:author"[^>]*>([^<]+)</);
+  const author = authorMatch?.[1]?.trim() ?? null;
+
+  return isbn || title ? { isbn, title, author } : null;
+}
+
+async function fetchGoodreadsUrl(isbn, title, author) {
+  const query = isbn || (author ? `${title} ${author}` : title);
+  const searchUrl = `https://www.goodreads.com/search?q=${encodeURIComponent(query)}&search_type=books`;
+
+  const res = await fetch(searchUrl, { headers: { "Accept-Language": "en-US,en;q=0.9" } });
+  if (!res.ok) return null;
+
+  const html = await res.text();
+  const match = html.match(/href="(\/book\/show\/[^"]+)"/);
+  if (!match) return null;
+  return `https://www.goodreads.com${match[1].split("?")[0]}`;
+}
+
+async function fetchRatings(bookUrl) {
   try {
-    const res = await fetch(doubanUrl, {
-      headers: { "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8" },
-    });
+    const res = await fetch(bookUrl, { headers: { "Accept-Language": "en-US,en;q=0.9" } });
     if (!res.ok) return null;
-    const html = await res.text();
-
-    const isbn13 = html.match(/ISBN[:：]\s*(\d{13})/);
-    const isbn10 = html.match(/ISBN[:：]\s*(\d{10})/);
-    const isbn = isbn13?.[1] ?? isbn10?.[1] ?? null;
-
-    const titleMatch = html.match(/property="v:itemreviewed">([^<]+)</);
-    const title = titleMatch?.[1]?.trim() ?? null;
-
-    const authorMatch = html.match(/rel="v:author"[^>]*>([^<]+)</);
-    const author = authorMatch?.[1]?.trim() ?? null;
-
-    if (!isbn && !title) return null;
-    return findGoodreadsData(isbn, title, author);
+    return parseRatingInfo(await res.text());
   } catch {
     return null;
   }
-}
-
-async function findGoodreadsData(isbn, title, author) {
-  const query = isbn || buildTitleQuery(title, author);
-  const searchUrl = `https://www.goodreads.com/search?q=${encodeURIComponent(query)}&search_type=books`;
-
-  const res = await fetch(searchUrl, {
-    headers: { "Accept-Language": "en-US,en;q=0.9" },
-  });
-  if (!res.ok) throw new Error(`Goodreads search failed: ${res.status}`);
-
-  const html = await res.text();
-  const url = parseFirstBookUrl(html);
-  if (!url) return null;
-
-  try {
-    const bookRes = await fetch(url, {
-      headers: { "Accept-Language": "en-US,en;q=0.9" },
-    });
-    if (bookRes.ok) {
-      const bookHtml = await bookRes.text();
-      const { rating, ratingCount } = parseRatingInfo(bookHtml);
-      return { url, rating, ratingCount };
-    }
-  } catch {}
-
-  return { url, rating: null, ratingCount: null };
-}
-
-function buildTitleQuery(title, author) {
-  return author ? `${title} ${author}` : title;
-}
-
-function parseFirstBookUrl(html) {
-  const match = html.match(/href="(\/book\/show\/[^"]+)"/);
-  if (!match) return null;
-  const path = match[1].split("?")[0];
-  return `https://www.goodreads.com${path}`;
 }
 
 function parseRatingInfo(html) {
