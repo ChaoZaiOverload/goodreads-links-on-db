@@ -13,7 +13,7 @@
   },
   "content_scripts": [
     {
-      "matches": ["https://book.douban.com/subject/*/"],
+      "matches": ["https://book.douban.com/subject/*"],
       "js": ["content.js"],
       "run_at": "document_idle"
     }
