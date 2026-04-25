@@ -74,9 +74,13 @@ async function findGoodreadsData(isbn, title, author) {
   if (!res.ok) throw new Error(`Goodreads search failed: ${res.status}`);
 
   const html = await res.text();
-  const match = html.match(/href="(\/book\/show\/[^"]+)"/);
+  // Match class="bookTitle" links — the actual search result titles — not
+  // sidebar/nav /book/show/ links that appear earlier in the page HTML.
+  const match =
+    html.match(/class="bookTitle"[^>]*href="(\/book\/show\/[^"?]*)/) ||
+    html.match(/href="(\/book\/show\/[^"?]*)"[^>]*class="bookTitle"/);
   if (!match) return null;
-  const url = `https://www.goodreads.com${match[1].split("?")[0]}`;
+  const url = `https://www.goodreads.com${match[1]}`;
 
   try {
     const bookRes = await fetch(url, { headers: { "Accept-Language": "en-US,en;q=0.9" } });
