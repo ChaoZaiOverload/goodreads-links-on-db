@@ -272,6 +272,8 @@ function createWidget(variant) {
 
 function enableTooltip(btn, tooltip, rating, ratingCount, editionLabel) {
   tooltip.innerHTML = buildTooltipHTML(rating, ratingCount, editionLabel);
+  btn.addEventListener("mouseenter", () => { tooltip.style.display = "block"; });
+  btn.addEventListener("mouseleave", () => { tooltip.style.display = "none"; });
 }
 
 function buildTooltipHTML(rating, ratingCount, editionLabel) {
