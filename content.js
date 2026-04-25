@@ -23,17 +23,96 @@
       if (response.rating != null || response.ratingCount != null) {
         enableTooltip(btn, tooltip, response.rating, response.ratingCount);
       }
+      // Look for an English edition concurrently — non-blocking.
+      lookupEnglishEdition(response.url, titleEl);
     } else {
       const query = isbn || `${title} ${author}`.trim();
       btn.href = `https://www.goodreads.com/search?q=${encodeURIComponent(query)}&search_type=books`;
       setButtonState(btn, "search");
+      lookupEnglishEdition(null, titleEl);
     }
   } catch {
     wrapper.remove();
   }
 })();
 
-// ── DOM helpers ──────────────────────────────────────────────────────────────
+// ── English edition ───────────────────────────────────────────────────────────
+
+async function lookupEnglishEdition(mainGoodreadsUrl, titleEl) {
+  const enDoubanUrl = findEnglishEditionUrl();
+  if (!enDoubanUrl) return;
+
+  const { wrapper: enWrapper, btn: enBtn, tooltip: enTooltip } = createWidget("en");
+  titleEl.parentElement.appendChild(enWrapper);
+
+  try {
+    const resp = await chrome.runtime.sendMessage({
+      type: "FIND_GOODREADS_FOR_DOUBAN_URL",
+      doubanUrl: enDoubanUrl,
+    });
+
+    if (resp?.url && resp.url !== mainGoodreadsUrl) {
+      enBtn.href = resp.url;
+      setButtonState(enBtn, "found");
+      if (resp.rating != null || resp.ratingCount != null) {
+        enableTooltip(enBtn, enTooltip, resp.rating, resp.ratingCount, "English edition");
+      }
+    } else {
+      enWrapper.remove();
+    }
+  } catch {
+    enWrapper.remove();
+  }
+}
+
+function findEnglishEditionUrl() {
+  const section = findOtherEditionsSection();
+  if (!section) return null;
+
+  for (const a of section.querySelectorAll('a[href*="book.douban.com/subject/"]')) {
+    const editionTitle = getEditionTitle(a);
+    if (editionTitle && isLikelyEnglish(editionTitle)) {
+      return a.href.split("?")[0];
+    }
+  }
+  return null;
+}
+
+function findOtherEditionsSection() {
+  const byClass =
+    document.querySelector(".subject_others_interest") ||
+    document.querySelector(".subject-others-interests") ||
+    document.querySelector("[class*='others-interest']");
+  if (byClass) return byClass;
+
+  for (const h of document.querySelectorAll("h2")) {
+    if (h.textContent.includes("其他版本")) {
+      return h.closest("div") || h.parentElement;
+    }
+  }
+  return null;
+}
+
+function getEditionTitle(linkEl) {
+  const img = linkEl.querySelector("img");
+  const fromImg = img?.getAttribute("title") || img?.getAttribute("alt");
+  if (fromImg?.trim()) return fromImg.trim();
+
+  const titleEl = linkEl.querySelector(".title") || linkEl.querySelector("p");
+  if (titleEl?.textContent?.trim()) return titleEl.textContent.trim();
+
+  return linkEl.textContent.trim().split("\n")[0].trim();
+}
+
+function isLikelyEnglish(text) {
+  const cleaned = text.replace(/\s/g, "");
+  if (!cleaned) return false;
+  const latin = (cleaned.match(/[a-zA-Z]/g) || []).length;
+  const cjk = (cleaned.match(/[一-鿿぀-ヿ가-힯]/g) || []).length;
+  return latin > cjk && latin / cleaned.length > 0.3;
+}
+
+// ── DOM helpers ───────────────────────────────────────────────────────────────
 
 function extractBookInfo() {
   const info = {};
@@ -57,8 +136,9 @@ function extractBookInfo() {
   return info;
 }
 
-function createWidget() {
-  // Outer wrapper: gives us position:relative for absolute tooltip child
+function createWidget(variant) {
+  const isEn = variant === "en";
+
   const wrapper = document.createElement("span");
   wrapper.style.cssText = `
     display: inline-block;
@@ -68,10 +148,36 @@ function createWidget() {
     flex-shrink: 0;
   `;
 
+  if (isEn) {
+    const badge = document.createElement("span");
+    badge.textContent = "EN";
+    badge.style.cssText = `
+      position: absolute;
+      top: -4px;
+      right: -6px;
+      background: #2E6DA4;
+      color: white;
+      font-size: 7px;
+      font-weight: bold;
+      font-family: Arial, sans-serif;
+      border-radius: 3px;
+      padding: 1px 3px;
+      line-height: 1.4;
+      pointer-events: none;
+      z-index: 1;
+    `;
+    wrapper.appendChild(badge);
+  }
+
+  const idleBg     = isEn ? "#EBF3FB" : "#F4F1EA";
+  const idleBorder = isEn ? "#91BAD8" : "#C9B99A";
+  const hoverBg    = isEn ? "#D7E9F5" : "#E8DED0";
+  const hoverBorder= isEn ? "#5B9EC9" : "#9D7F5E";
+
   const btn = document.createElement("a");
   btn.target = "_blank";
   btn.rel = "noopener noreferrer";
-  btn.title = "Open on Goodreads";
+  btn.title = isEn ? "Open English edition on Goodreads" : "Open on Goodreads";
   btn.style.cssText = `
     display: inline-flex;
     align-items: center;
@@ -79,8 +185,8 @@ function createWidget() {
     width: 28px;
     height: 28px;
     border-radius: 50%;
-    background: #F4F1EA;
-    border: 1.5px solid #C9B99A;
+    background: ${idleBg};
+    border: 1.5px solid ${idleBorder};
     cursor: pointer;
     text-decoration: none;
     transition: background 0.15s, border-color 0.15s;
@@ -105,7 +211,6 @@ function createWidget() {
     pointer-events: none;
     z-index: 99999;
   `;
-  // Arrow pointing down
   tooltip.innerHTML = `<div style="
     position:absolute; bottom:-6px; left:50%; transform:translateX(-50%);
     width:10px; height:6px; overflow:hidden;
@@ -118,12 +223,12 @@ function createWidget() {
   setButtonState(btn, "loading");
 
   btn.addEventListener("mouseenter", () => {
-    btn.style.background = "#E8DED0";
-    btn.style.borderColor = "#9D7F5E";
+    btn.style.background = hoverBg;
+    btn.style.borderColor = hoverBorder;
   });
   btn.addEventListener("mouseleave", () => {
-    btn.style.background = "#F4F1EA";
-    btn.style.borderColor = "#C9B99A";
+    btn.style.background = idleBg;
+    btn.style.borderColor = idleBorder;
   });
 
   wrapper.appendChild(tooltip);
@@ -131,21 +236,23 @@ function createWidget() {
   return { wrapper, btn, tooltip };
 }
 
-function enableTooltip(btn, tooltip, rating, ratingCount) {
-  tooltip.innerHTML = buildTooltipHTML(rating, ratingCount);
-
-  btn.addEventListener("mouseenter", () => { tooltip.style.display = "block"; });
-  btn.addEventListener("mouseleave", () => { tooltip.style.display = "none"; });
+function enableTooltip(btn, tooltip, rating, ratingCount, editionLabel) {
+  tooltip.innerHTML = buildTooltipHTML(rating, ratingCount, editionLabel);
 }
 
-function buildTooltipHTML(rating, ratingCount) {
-  let html = `<div style="display:flex;align-items:center;gap:6px;margin-bottom:3px;">`;
+function buildTooltipHTML(rating, ratingCount, editionLabel) {
+  let html = "";
 
+  if (editionLabel) {
+    html += `<div style="color:#2E6DA4;font-size:10px;font-family:Arial,sans-serif;font-weight:bold;
+      text-transform:uppercase;letter-spacing:0.6px;margin-bottom:5px;">${editionLabel}</div>`;
+  }
+
+  html += `<div style="display:flex;align-items:center;gap:6px;margin-bottom:3px;">`;
   if (rating != null) {
     html += `<span style="letter-spacing:1px;font-size:15px;">${renderStars(rating)}</span>`;
     html += `<span style="font-weight:bold;color:#553B08;font-size:14px;">${rating.toFixed(2)}</span>`;
   }
-
   html += `</div>`;
 
   if (ratingCount != null) {
@@ -164,7 +271,6 @@ function renderStars(rating) {
     if (fill >= 0.75) {
       html += `<span style="color:#E07B54;">★</span>`;
     } else if (fill >= 0.25) {
-      // Half star: overlay clipped brown star on grey star
       html += `<span style="position:relative;display:inline-block;">` +
         `<span style="color:#C9B99A;">★</span>` +
         `<span style="position:absolute;left:0;top:0;width:50%;overflow:hidden;color:#E07B54;">★</span>` +
