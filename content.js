@@ -92,15 +92,37 @@ function findEnglishEditionUrl() {
   return null;
 }
 
+// Languages Douban uses to label non-English editions.
+const NON_ENGLISH_LANG_LABELS = [
+  "德语", "法语", "俄语", "日语", "韩语", "西班牙语",
+  "葡萄牙语", "意大利语", "荷兰语", "波兰语", "阿拉伯语",
+  "瑞典语", "挪威语", "丹麦语", "芬兰语", "土耳其语",
+];
+
 function searchSectionForEnglish(container) {
-  // Match both relative (/subject/…) and absolute (https://book.douban.com/subject/…) hrefs.
-  const selector = 'a[href^="/subject/"], a[href*="book.douban.com/subject/"]';
-  for (const a of container.querySelectorAll(selector)) {
-    if (!a.href.includes("book.douban.com/subject/")) continue;
-    const editionTitle = getEditionTitle(a);
-    if (editionTitle && isLikelyEnglish(editionTitle)) {
+  const linkSelector = 'a[href^="/subject/"], a[href*="book.douban.com/subject/"]';
+
+  // Pass 1: look for an edition card explicitly labeled 英语 or 英文.
+  // Douban always shows the language on each edition card — this is the most
+  // reliable signal and avoids confusing German/Russian/etc. editions whose
+  // titles also happen to use Latin script.
+  for (const card of container.querySelectorAll("li, dl")) {
+    const cardText = card.textContent;
+    if (!cardText.includes("英语") && !cardText.includes("英文")) continue;
+    const a = card.querySelector(linkSelector);
+    if (a?.href.includes("book.douban.com/subject/")) {
       return a.href.split("?")[0];
     }
+  }
+
+  // Pass 2: title heuristic, but skip cards that carry a non-English language label.
+  for (const a of container.querySelectorAll(linkSelector)) {
+    if (!a.href.includes("book.douban.com/subject/")) continue;
+    const card = a.closest("li") || a.closest("dl");
+    const cardText = card?.textContent ?? "";
+    if (NON_ENGLISH_LANG_LABELS.some((l) => cardText.includes(l))) continue;
+    const title = getEditionTitle(a);
+    if (title && isLikelyEnglish(title)) return a.href.split("?")[0];
   }
   return null;
 }
