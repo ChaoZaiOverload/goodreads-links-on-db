@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "Goodreads Link on Douban",
+  "name": "在豆瓣显示Goodreads链接和评分",
   "version": "1.1.0",
-  "description": "Shows a Goodreads link next to the book title on Douban book pages",
+  "description": "Shows a Goodreads link next to the book title on Douban book pages。在豆瓣图书页，让你可以同时看到豆瓣和goodreads的链接和评分。",
   "permissions": ["webNavigation"],
   "host_permissions": [
     "https://book.douban.com/subject/*",
